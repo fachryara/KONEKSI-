@@ -1,0 +1,505 @@
+/*------------------------------------------------------------------------------
+The SMERU Research Institute
+--------------------------------------------------------------------------------
+Author          : Affandi Ismail
+Project         : Climate Modelling Microsimulation Koneksi LPEM
+Email           : aismail@smeru.or.id
+-------------------------------------------------------------------------------- */
+*****************************************************************************
+* Processing of Indonesia's Susenas microdata 2018
+*****************************************************************************
+
+clear all
+set more off
+cap log close
+
+***Gunakan ini untuk mengatur direktori komputer/laptop tiap peneliti
+*user 1 - Affandi
+else if c(username) == "aaffa" { // change username
+	qui cd "C:\Users\aaffa\OneDrive\PCA-UNICEF\03.Data\Data untuk analisis" // change your directory
+
+	global data18  "D:\SMERU\Raw Data\SUSENAS\SUSENAS 2018\Susenas 2018\KOR"
+	global temp "C:\Users\aaffa\OneDrive\SMERU\2023\KONEKSI_CLIMATE_MODELING\processed_data"
+}
+
+*user 2 - Lia
+else if c(username) == ""  { // change username
+	qui cd ""
+
+	global data18  ""
+	global temp ""
+}
+
+**********************************************************************************
+
+// Create dataset with all individual and household variables
+use "$data18/kor18ind_revisi_diseminasi.dta", clear
+
+merge n:1 URUT using "$data18/kor18rt_diseminasi.dta", nogenerate
+
+
+// Add expenditure variables
+joinby URUT using "$data18/blok43.dta", unm(b)
+
+ren *, lower
+order r301 r302 r303 r304 r305, after(r105)
+order urut, first
+order wi wi1 wi2 wi3 fwt, last
+
+drop _m
+
+*****************************************************************************
+* IDENTIFIERS AND WEIGHTS
+*****************************************************************************
+gen survey_year = 2018
+la var survey_year "Year"
+
+gen survey_month = 3
+la var survey_month "Month"
+
+rename r401 pid
+la var pid "Person line number"
+
+rename urut hhid
+la var hhid "Unique household ID"
+
+rename fwt wgt_pop
+la var wgt_pop "Person weight"
+
+gen wgt_hh = wgt_pop if pid == 1
+la var wgt_hh "Household weight"
+
+gen long PSU = wi3+r102*100000+r101*10000000
+egen SSU = concat (PSU wi2)
+gen long Strata = r105+r102*10+r101*1000
+
+tostring PSU, replace
+tostring Strata, replace
+
+la var SSU "SSU"
+la var PSU "PSU"
+la var Strata "Strata"
+
+order survey_year survey_month hhid pid wgt_hh wgt_pop PSU SSU Strata, first
+
+*****************************************************************************
+* GEOGRAPHICAL MARKERS: REGION, PROVINCE, URBAN/RURAL
+*****************************************************************************
+rename r101 province
+la var province "Province"
+la def province ///
+          11	"Aceh"	///
+					12	"Sumatera Utara"	///
+					13	"Sumatera Barat"	///
+					14	"Riau"	///
+					15	"Jambi"	///
+					16	"Sumatera Selatan"	///
+					17	"Bengkulu"	///
+					18	"Lampung"	///
+					19	"Kepulauan Bangka Belitung"	///
+					21	"Kepulauan Riau"	///
+					31	"DKI Jakarta"	///
+					32	"Jawa Barat"	///
+					33	"Jawa Tengah"	///
+					34	"DI Yogyakarta"	///
+					35	"Jawa Timur"	///
+					36	"Banten"	///
+					51	"Bali"	///
+					52	"Nusa Tenggara Barat"	///
+					53	"Nusa Tenggara Timur"	///
+					61	"Kalimantan Barat"	///
+					62	"Kalimantan Tengah"	///
+					63	"Kalimantan Selatan"	///
+					64	"Kalimantan Timur"	///
+					65	"Kalimantan Utara"	///
+					71	"Sulawesi Utara"	///
+					72	"Sulawesi Tengah"	///
+					73	"Sulawesi Selatan"	///
+					74	"Sulawesi Tenggara"	///
+					75	"Gorontalo"	///
+					76	"Sulawesi Barat"	///
+					81	"Maluku"	///
+					82	"Maluku Utara"	///
+					91	"Papua Barat"	///
+					94	"Papua"
+la val province province
+
+recode province (11/21 = 1) (31/36 = 2) (51/53 = 3) ///
+                (61/65 = 4) (71/76 = 5) (81/94 = 6), gen(region)
+la var region "Region"
+la def region ///
+          1 "Sumatera"    ///
+          2 "Jawa"        ///
+          3 "Balinustra"  ///
+          4 "Kalimantan"  ///
+          5 "Sulawesi"    ///
+          6 "Maluku dan Papua"
+la val region region
+
+gen int district = province*100 + r102
+
+rename r105 urban
+replace urban = 0 if urban == 2
+la var urban "Place of residence"
+la def urban 0 "Rural" 1 "Urban"
+la val urban urban
+
+order region province district urban, after(Strata)
+
+*****************************************************************************
+* DEMOGRAPHIC CHARACTERISTICS: SEX, AGE, DISABILITY STATUS
+*****************************************************************************
+
+// Relation to HH Head
+rename r403 relation
+la var relation "Relationship to household head"
+la def relation 1 "Head of household" ///
+				2 "Wife/husband" ///
+				3 "Biological/stepchild" ///
+				4 "Foster child" ///
+				5 "Child-in-law"  ///
+				6 "Grandchild" ///
+				7 "Parents(or in-law)" ///
+				8 "Servant" ///
+				9 "Other"
+la val relation relation
+
+// Sex
+rename r405 sex
+replace sex = 0 if sex == 2
+la var sex "Sex"
+la def sex 0 "Female" 1 "Male"
+la val sex sex
+
+// HH Sex
+clonevar sex_hh = sex
+replace sex_hh = . if pid != 1
+bysort hhid (sex_hh) : replace sex_hh = sex_hh[1]
+la var sex_hh "Sex of household head"
+
+// Age
+rename r407 age
+la var age "Age (in completed years)"
+
+// HH with Child 0 - 17 years old
+gen x = 1 if inrange(age,0,17)
+	replace x = 0 if age > 17
+	egen hh_child = max(x), by(hhid)
+		drop x
+	la var hh_child "Household with Child Member (0-17 years)"
+	la def hh_child 1 "Yes" 0 "No"
+	la val hh_child hh_child
+
+// Person with disability (functional limitations) if a lot of diffiulty or
+// cannot do an activity at all in at least one functional domain
+// Disability status only available in Susenas 2018 onwards
+gen disabled = 0
+replace disabled = . if age < 2
+la var disabled "Disability status"
+
+foreach domain in r902 r903 r904 r905 r906 r907 r908 r909 {
+  replace disabled = 1 if inlist(`domain', 1, 2)
+  }
+
+la def disabled 0 "No difficulty" 1 "Functional difficulty"
+la val disabled disabled
+
+bys hhid: egen disabled_hh = max(disabled)
+la var disabled_hh "Household with people with disability"
+la def disabled_hh 0 "Household without people with disability" 1 "Household with people with disability"
+la val disabled_hh disabled_hh
+
+// Highest education of the household head variable
+recode r615 (. = 1 "No schooling")(1 = 2 "Some primary") ///
+            (2/5 = 3 "Completed primary") (6/9 = 4 "Junior secondary") ///
+            (10/15 = 5 "Senior secondary") (16/21 = 6 "Tertiary"), g(edu_highest)
+
+clonevar edu_hh = edu_highest
+replace edu_hh = . if pid != 1
+bysort hhid (edu_hh) : replace edu_hh = edu_hh[1]
+la var edu_highest "Educational attainment"
+la var edu_hh "Educational attainment of household head"
+
+
+order relation age sex sex_hh edu_highest edu_hh disabled disabled_hh, after(urban)
+
+*****************************************************************************
+* HOUSEHOLDS CHARACTERISTICS: WELFARE RANKINGS (QUINTILE, DECILE)
+*****************************************************************************
+
+rename kapita exp_pc
+la var exp_pc "Nominal monthly expenditure per capita"
+
+// Define urban and rural provincial poverty lines (from BPS website)
+// They can also be used as price deflators
+gen npl = .
+la var npl "Value of national poverty line (rupiah per month)"
+replace npl = 486338 if province == 11 & urban == 1
+replace npl = 448363 if province == 12 & urban == 1
+replace npl = 496142 if province == 13 & urban == 1
+replace npl = 491379 if province == 14 & urban == 1
+replace npl = 487791 if province == 15 & urban == 1
+replace npl = 437983 if province == 16 & urban == 1
+replace npl = 516954 if province == 17 & urban == 1
+replace npl = 444246 if province == 18 & urban == 1
+replace npl = 622935 if province == 19 & urban == 1
+replace npl = 563993 if province == 21 & urban == 1
+replace npl = 593108 if province == 31 & urban == 1
+replace npl = 368680 if province == 32 & urban == 1
+replace npl = 353240 if province == 33 & urban == 1
+replace npl = 426580 if province == 34 & urban == 1
+replace npl = 385009 if province == 35 & urban == 1
+replace npl = 448518 if province == 36 & urban == 1
+replace npl = 387566 if province == 51 & urban == 1
+replace npl = 377145 if province == 52 & urban == 1
+replace npl = 418525 if province == 53 & urban == 1
+replace npl = 423128 if province == 61 & urban == 1
+replace npl = 387139 if province == 62 & urban == 1
+replace npl = 441218 if province == 63 & urban == 1
+replace npl = 576265 if province == 64 & urban == 1
+replace npl = 604691 if province == 65 & urban == 1
+replace npl = 340347 if province == 71 & urban == 1
+replace npl = 434414 if province == 72 & urban == 1
+replace npl = 314549 if province == 73 & urban == 1
+replace npl = 311241 if province == 74 & urban == 1
+replace npl = 318195 if province == 75 & urban == 1
+replace npl = 321324 if province == 76 & urban == 1
+replace npl = 467727 if province == 81 & urban == 1
+replace npl = 428897 if province == 82 & urban == 1
+replace npl = 530295 if province == 91 & urban == 1
+replace npl = 542542 if province == 94 & urban == 1
+replace npl = 454740 if province == 11 & urban == 0
+replace npl = 421586 if province == 12 & urban == 0
+replace npl = 460249 if province == 13 & urban == 0
+replace npl = 471687 if province == 14 & urban == 0
+replace npl = 398501 if province == 15 & urban == 0
+replace npl = 374527 if province == 16 & urban == 0
+replace npl = 465424 if province == 17 & urban == 0
+replace npl = 385965 if province == 18 & urban == 0
+replace npl = 638300 if province == 19 & urban == 0
+replace npl = 528788 if province == 21 & urban == 0
+replace npl = 364151 if province == 32 & urban == 0
+replace npl = 348206 if province == 33 & urban == 0
+replace npl = 366256 if province == 34 & urban == 0
+replace npl = 361493 if province == 35 & urban == 0
+replace npl = 390309 if province == 36 & urban == 0
+replace npl = 372828 if province == 51 & urban == 0
+replace npl = 356361 if province == 52 & urban == 0
+replace npl = 336584 if province == 53 & urban == 0
+replace npl = 402349 if province == 61 & urban == 0
+replace npl = 426596 if province == 62 & urban == 0
+replace npl = 414494 if province == 63 & urban == 0
+replace npl = 570012 if province == 64 & urban == 0
+replace npl = 561681 if province == 65 & urban == 0
+replace npl = 348023 if province == 71 & urban == 0
+replace npl = 405707 if province == 72 & urban == 0
+replace npl = 299917 if province == 73 & urban == 0
+replace npl = 298702 if province == 74 & urban == 0
+replace npl = 314727 if province == 75 & urban == 0
+replace npl = 318512 if province == 76 & urban == 0
+replace npl = 448337 if province == 81 & urban == 0
+replace npl = 405558 if province == 82 & urban == 0
+replace npl = 505941 if province == 91 & urban == 0
+replace npl = 482000 if province == 94 & urban == 0
+
+// Adjust expenditure per capita for price differences between regions
+qui sum npl [aw = wgt_pop]
+local npline = r(mean)
+gen rexp_pc = exp_pc * `npline' / npl
+la var rexp_pc "Real monthly expenditure per capita"
+
+// Create welfare rankings of households
+la def quintile 1 "Bottom" 2 "2nd" 3 "3rd" 4 "4th" 5 "Top"
+la def decile 1 "Bottom" 2 "2nd" 3 "3rd" 4 "4th" 5 "5th" 6 "6th" 7 "7th" 8 "8th" 9 "9th" 10 "Top"
+
+fastxtile decile = exp_pc [aw = wgt_pop], n(10)
+
+la var decile "Household decile group (based on expenditure per capita)"
+la val decile decile
+
+fastxtile quintile = exp_pc [aw = wgt_pop], n(5)
+
+la var quintile "Household quintile group (based on expenditure per capita)"
+la val quintile quintile
+
+fastxtile percentile = exp_pc [aw = wgt_pop], n(100)
+
+la var percentile "Household percentile group (based on expenditure per capita)"
+la val percentile percentile
+
+// poverty status
+gen p0_npl = exp_pc<=npl if exp_pc!=.
+
+la def p0_npl 0 "Not poor" 1 "Poor"
+la val p0_npl p0_npl
+
+order exp_pc rexp_pc decile quintile npl p0_npl, after(disabled_hh)
+
+// sector of work
+recode r804 (1 2 3 5= 1 "Agriculture and Animal Production") (6 = 2 "Forestry") ///
+	(4 = 3 "Fisheries") (7 = 4 "Mining") (8 = 5 "Manufacturing") (9 = 6 "Electricity") ///
+	(10 = 7 "Water supply and sewage") (11 = 8 "Construction") (12 = 9 "Wholesale and retail trade") ///
+	(13 = 10 "Transportation and storage") (14 = 11 "Accommodation and food services") (15 = 12 "Information and communication") ///
+	(16 = 13 "Finance and insurance") (17 = 14 "Real Estate") (18 19 = 15 "Business services") ///
+	(20 = 16 "Public administration") (21 = 17 "Education") (22 = 18 "Health and social works") ///
+	(23/26 = 19 "Other services"), g(sector_19)
+la var sector_19 "19 Sector for SAM"
+
+clonevar sector_19_hh = sector_19
+replace sector_19_hh = . if pid != 1
+bysort hhid (sector_19_hh) : replace sector_19_hh = sector_19[1]
+
+sum pid
+foreach n of numlist 2/`r(max)' {
+	bysort hhid (sector_19_hh) : replace sector_19_hh = sector_19[`n'] if sector_19_hh==.
+}
+
+la var sector_19_hh "HH head's sector of work"
+
+//create income from mpc
+gen income_pc = .
+
+local multipliers "100 100 92.86058 84.05128 92.30368 88.56298 86.24808 85.60088 82.01058 80.98068 82.19808 84.46168 89.97308 88.89208 78.90968 82.82758 86.62918 88.02688 88.13258 81.72748 86.78558 79.61358 76.87928 74.03978 79.84058 80.32248 78.56058 86.32248 84.08558 69.15788 80.01058 82.52498 80.17308 83.01868 82.41058 72.63888 77.67308 78.25918 76.68558 74.09458 76.51058 75.32248 81.62308 79.71488 76.86058 76.67308 76.42368 69.91738 82.76058 69.00598 69.20028 67.44998 73.91058 76.41108 73.17308 75.29708 76.64808 79.20848 74.26058 66.15788 73.47308 74.39838 69.06058 67.05658 73.02308 66.86678 69.72308 67.74018 69.86058 69.27178 72.84808 64.09458 71.22308 67.87938 67.66058 63.74018 67.68558 67.53768 66.99808 67.68958 71.62308 69.71488 63.69808 65.28448 68.43558 61.93008 61.87308 61.77818 66.87308 69.90468 63.18558 59.86678 64.24808 63.04398 67.86058 63.01868 64.13558 68.01868 59.62308 58.22118 "
+
+local i = 1
+foreach m in `multipliers' {
+    qui replace income_pc = exp_pc / `m'*100 if percentile == `i'
+    local i = `i' + 1
+}
+
+//income decile
+
+levelsof sector_19_hh, local(sector)
+foreach s of local sector{
+	fastxtile inc_decile_fd_`s' = income_pc [aw = wgt_pop] if sex_hh==0 & disabled_hh==1 & sector_19_hh==`s', n(10)
+}
+foreach s of local sector{
+	fastxtile inc_decile_fn_`s' = income_pc [aw = wgt_pop] if sex_hh==0 & disabled_hh==0 & sector_19_hh==`s', n(10)
+}
+foreach s of local sector{
+	fastxtile inc_decile_md_`s' = income_pc [aw = wgt_pop] if sex_hh==1 & disabled_hh==1 & sector_19_hh==`s', n(10)
+}
+foreach s of local sector{
+	fastxtile inc_decile_mn_`s' = income_pc [aw = wgt_pop] if sex_hh==1 & disabled_hh==0 & sector_19_hh==`s', n(10)
+}
+
+levelsof sector_19_hh, local(sector)
+foreach s of local sector{
+	qui la var inc_decile_fd_`s' "Household income decile group female disability"
+	qui la var inc_decile_fn_`s' "Household income decile group female no disability"
+	qui la var inc_decile_md_`s' "Household income decile group male disability"
+	qui la var inc_decile_mn_`s' "Household income decile group male no disability"
+}
+
+gen inc_decile=.
+
+levelsof sector_19_hh, local(sector)
+local listmf fd fn md mn
+foreach var of local listmf {
+	foreach s of local sector {
+		qui replace inc_decile = inc_decile_`var'_`s' if inc_decile_`var'_`s' != .
+	}
+}
+
+fastxtile inc_decile_coba = income_pc [aw = wgt_pop], n(10)
+
+// calculate new income
+merge n:1 sector_19_hh inc_decile_coba sex_hh disabled_hh using "$temp\ms_to_susenas.dta", nogen
+drop if hhid==.
+
+gen new_income_pc = income_pc + (income_pc*inc_change/100)
+replace new_income_pc = income_pc if new_income_pc==.
+
+
+local multipliers "100 100 92.86058 84.05128 92.30368 88.56298 86.24808 85.60088 82.01058 80.98068 82.19808 84.46168 89.97308 88.89208 78.90968 82.82758 86.62918 88.02688 88.13258 81.72748 86.78558 79.61358 76.87928 74.03978 79.84058 80.32248 78.56058 86.32248 84.08558 69.15788 80.01058 82.52498 80.17308 83.01868 82.41058 72.63888 77.67308 78.25918 76.68558 74.09458 76.51058 75.32248 81.62308 79.71488 76.86058 76.67308 76.42368 69.91738 82.76058 69.00598 69.20028 67.44998 73.91058 76.41108 73.17308 75.29708 76.64808 79.20848 74.26058 66.15788 73.47308 74.39838 69.06058 67.05658 73.02308 66.86678 69.72308 67.74018 69.86058 69.27178 72.84808 64.09458 71.22308 67.87938 67.66058 63.74018 67.68558 67.53768 66.99808 67.68958 71.62308 69.71488 63.69808 65.28448 68.43558 61.93008 61.87308 61.77818 66.87308 69.90468 63.18558 59.86678 64.24808 63.04398 67.86058 63.01868 64.13558 68.01868 59.62308 58.22118 "
+
+gen new_exp_pc = .
+local i = 1
+foreach m in `multipliers' {
+    qui replace new_exp_pc = new_income_pc * `m'/100 if percentile == `i'
+    local i = `i' + 1
+}
+
+gen new_p0_npl = new_exp_pc<=npl if exp_pc!=.
+
+la val p0_npl new_exp_pc
+
+sum p0_npl new_p0_npl [aw=wgt_pop]
+sum p0_npl new_p0_npl [aw=wgt_pop] if sex_hh==0 & disabled_hh==1
+sum p0_npl new_p0_npl [aw=wgt_pop] if sex_hh==0 & disabled_hh==0
+sum p0_npl new_p0_npl [aw=wgt_pop] if sex_hh==1 & disabled_hh==1
+sum p0_npl new_p0_npl [aw=wgt_pop] if sex_hh==1 & disabled_hh==0
+
+// graphs
+frame copy default graph
+frame change graph
+
+collapse inc_change [aw=wgt_pop], by(inc_decile_coba)
+
+twoway (scatter inc_change inc_decile_coba) (lfit inc_change inc_decile_coba), xtitle(Income Decile) ytitle(Income Change) ylab(0(3)15) legend(off) title(All household)
+
+frame copy default graph_dis
+frame change graph_dis
+
+//graph by hh type
+egen disabled_sex_hh = concat(sex_hh disabled_hh)
+encode disabled_sex_hh, gen(joint_hh)
+drop disabled_sex_hh
+
+la drop joint_hh
+la var joint_hh "Household head sex and people with disability"
+la def joint_hh 1 "Female HH head without people with disability" 2 "Female HH head with people with disability" ///
+				3 "Male HH head without people with disability" 4 "Male HH head with people with disability"
+la val joint_hh joint_hh
+
+collapse inc_change [aw=wgt_pop], by(inc_decile_coba joint_hh)
+
+twoway (scatter inc_change inc_decile_coba if joint_hh == 1) (lfit inc_change inc_decile_coba if joint_hh == 1), xtitle(Income Decile) ytitle(Income Change) ylab(0(3)15) legend(off) title(Female HH head without people with disability)
+
+twoway (scatter inc_change inc_decile_coba if joint_hh == 2) (lfit inc_change inc_decile_coba if joint_hh == 2), xtitle(Income Decile) ytitle(Income Change) ylab(0(3)15) legend(off) title(Female HH head with people with disability)
+
+twoway (scatter inc_change inc_decile_coba if joint_hh == 3) (lfit inc_change inc_decile_coba if joint_hh == 3), xtitle(Income Decile) ytitle(Income Change) ylab(0(3)15) legend(off) title(Male HH head without people with disability)
+
+twoway (scatter inc_change inc_decile_coba if joint_hh == 4) (lfit inc_change inc_decile_coba if joint_hh == 4), xtitle(Income Decile) ytitle(Income Change) ylab(0(3)15) legend(off) title(Male HH head with people with disability)
+
+/*
+tab2xl sector_19_hh inc_decile using "$temp\income_susenas_v2coba.xlsx" [fw=round(wgt_pop)] if sex_hh==0 & disabled_hh==1, summarize(income_pc) sheet("female_dis") row(1) col(1)
+
+tab2xl sector_19_hh inc_decile using "$temp\income_susenas_v2coba.xlsx" [fw=round(wgt_pop)] if sex_hh==0 & disabled_hh==0, summarize(income_pc) sheet("female_nodis") row(1) col(1)
+
+tab2xl sector_19_hh inc_decile using "$temp\income_susenas_v2coba.xlsx" [fw=round(wgt_pop)] if sex_hh==1 & disabled_hh==1, summarize(income_pc) sheet("male_dis") row(1) col(1)
+
+tab2xl sector_19_hh inc_decile using "$temp\income_susenas_v2coba.xlsx" [fw=round(wgt_pop)] if sex_hh==1 & disabled_hh==0, summarize(income_pc) sheet("male_nodis") row(1) col(1)
+*/
+
+
+/*
+// tabulate
+tab2xl disabled_hh sex_hh using "$temp\household_sample.xlsx" if wgt_hh!=., row(1) col(1)
+
+// CDF plot
+egen disabled_sex_hh = concat(sex_hh disabled_hh)
+encode disabled_sex_hh, gen(joint_hh)
+drop disabled_sex_hh
+
+la drop joint_hh
+la var joint_hh "Household head sex and people with disability"
+la def joint_hh 1 "Female HH head without people with disability" 2 "Female HH head with people with disability" ///
+				3 "Male HH head without people with disability" 4 "Male HH head with people with disability"
+la val joint_hh joint_hh
+
+gen log_exp_pc = log(exp_pc)
+la var log_exp_pc "Nominal monthly expenditure per capita (log)"
+
+cdfplot log_exp_pc [aw=wgt_hh], by(joint_hh) legend(size(vsmall) row(2) pos(6) ///
+		lab(1 "Female HH head without people with disability") lab(2 "Female HH head with people with disability") ///
+		lab(3 "Male HH head without people with disability") lab(4 "Male HH head with people with disability")) ///
+		opt1(lpattern(solid dash solid dash) lcolor(red%80 red%80 blue%80 blue%80))
+graph export "$temp\exp_cdf.png", replace
+*/
+
+/*// Drop variables not needed
+keep survey_year - dependency_ratio_hh
+
+save "$temp\sus18.dta",replace
+*/
